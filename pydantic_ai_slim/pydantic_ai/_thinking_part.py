@@ -2,8 +2,8 @@ from __future__ import annotations as _annotations
 
 from pydantic_ai.messages import TextPart, ThinkingPart
 
-START_THINK_TAG = '<think>'
-END_THINK_TAG = '</think>'
+START_THINK_TAG = "<think>"
+END_THINK_TAG = "</think>"
 
 
 def split_content_into_text_and_thinking(content: str) -> list[ThinkingPart | TextPart]:
@@ -15,22 +15,27 @@ def split_content_into_text_and_thinking(content: str) -> list[ThinkingPart | Te
     We use the `<think>` tag because that's how Groq uses it in the `raw` format, so instead of using `<Thinking>` or
     something else, we just match the tag to make it easier for other models that don't support the `ThinkingPart`.
     """
+    # Fast, memory-efficient rewrite.
     parts: list[ThinkingPart | TextPart] = []
-
-    start_index = content.find(START_THINK_TAG)
-    while start_index >= 0:
-        before_think, content = content[:start_index], content[start_index + len(START_THINK_TAG) :]
-        if before_think:
-            parts.append(TextPart(content=before_think))
-        end_index = content.find(END_THINK_TAG)
-        if end_index >= 0:
-            think_content, content = content[:end_index], content[end_index + len(END_THINK_TAG) :]
-            parts.append(ThinkingPart(content=think_content))
-        else:
-            # We lose the `<think>` tag, but it shouldn't matter.
-            parts.append(TextPart(content=content))
-            content = ''
-        start_index = content.find(START_THINK_TAG)
-    if content:
-        parts.append(TextPart(content=content))
+    s = content
+    st, et = START_THINK_TAG, END_THINK_TAG
+    st_len, et_len = len(st), len(et)
+    i = 0
+    n = len(s)
+    while i < n:
+        si = s.find(st, i)
+        if si == -1:
+            # Remaining is text
+            if i < n:
+                parts.append(TextPart(content=s[i:]))
+            break
+        if si > i:
+            parts.append(TextPart(content=s[i:si]))
+        ti = s.find(et, si + st_len)
+        if ti == -1:
+            # no closing tag, treat rest as text
+            parts.append(TextPart(content=s[si + st_len :]))
+            break
+        parts.append(ThinkingPart(content=s[si + st_len : ti]))
+        i = ti + et_len
     return parts
