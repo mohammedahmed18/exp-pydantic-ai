@@ -369,13 +369,30 @@ class InstrumentedModel(WrapperModel):
 
     @staticmethod
     def event_to_dict(event: Event) -> dict[str, Any]:
-        if not event.body:
-            body = {}  # pragma: no cover
-        elif isinstance(event.body, Mapping):
-            body = event.body  # type: ignore
-        else:
-            body = {'body': event.body}
-        return {**body, **(event.attributes or {})}
+        # Micro-optimization: use local variables and avoid type: ignore, minimize dict merges
+        attributes = event.attributes if event.attributes is not None else {}
+        body = event.body
+        # Fast path: avoid dict-copy and merging for empty case
+        if not body:
+            if not attributes:
+                return {}
+            return dict(attributes)
+        # If body is a mapping, merge body and attributes efficiently
+        if isinstance(body, Mapping):
+            if not attributes:
+                # Already a mapping, cast to dict if not already
+                return dict(body) if not isinstance(body, dict) else body
+            # Merge both, avoiding the {**a, **b} unpacking for speed
+            out = dict(body) if not isinstance(body, dict) else body.copy()
+            out.update(attributes)
+            return out
+        # body is not a mapping, so create {'body': ...}
+        if not attributes:
+            return {'body': body}
+        # Both attributes and a non-mapping body to merge
+        out = dict(attributes)
+        out['body'] = body
+        return out
 
     @staticmethod
     def serialize_any(value: Any) -> str:
