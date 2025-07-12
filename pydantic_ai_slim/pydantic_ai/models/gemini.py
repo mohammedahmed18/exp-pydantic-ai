@@ -46,6 +46,13 @@ from . import (
     download_item,
     get_user_agent,
 )
+"""Latest Gemini models."""
+"""Possible Gemini model names.
+
+Since Gemini supports a variety of date-stamped models, we explicitly list the latest models but
+allow any name in the type hints.
+See [the Gemini API docs](https://ai.google.dev/gemini-api/docs/models/gemini#model-variations) for a full list.
+"""
 
 LatestGeminiModelNames = Literal[
     'gemini-1.5-flash',
@@ -610,20 +617,25 @@ class _GeminiContent(TypedDict):
 
 
 def _content_model_response(m: ModelResponse) -> _GeminiContent:
+    # Locals for micro-optimization in loop
+    _function_call_part_from_call_local = _function_call_part_from_call
+    _GeminiTextPart_local = _GeminiTextPart
+
     parts: list[_GeminiPartUnion] = []
+
     for item in m.parts:
         if isinstance(item, ToolCallPart):
-            parts.append(_function_call_part_from_call(item))
-        elif isinstance(item, ThinkingPart):
-            # NOTE: We don't send ThinkingPart to the providers yet. If you are unsatisfied with this,
-            # please open an issue. The below code is the code to send thinking to the provider.
-            # parts.append(_GeminiTextPart(text=item.content, thought=True))
-            pass
-        elif isinstance(item, TextPart):
+            parts.append(_function_call_part_from_call_local(item))
+            continue
+        # ThinkingPart is explicitly dropped: just skip
+        if isinstance(item, TextPart):
             if item.content:
-                parts.append(_GeminiTextPart(text=item.content))
-        else:
-            assert_never(item)
+                parts.append(_GeminiTextPart_local(text=item.content))
+            continue
+        if isinstance(item, ThinkingPart):
+            continue
+        assert_never(item)
+
     return _GeminiContent(role='model', parts=parts)
 
 
