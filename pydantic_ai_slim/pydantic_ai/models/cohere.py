@@ -32,6 +32,7 @@ from . import (
     ModelRequestParameters,
     check_allow_model_requests,
 )
+from cohere import ChatResponse
 
 try:
     from cohere import (
@@ -300,21 +301,32 @@ def _map_usage(response: ChatResponse) -> usage.Usage:
         return usage.Usage()
     else:
         details: dict[str, int] = {}
-        if u.billed_units is not None:
-            if u.billed_units.input_tokens:  # pragma: no branch
-                details['input_tokens'] = int(u.billed_units.input_tokens)
-            if u.billed_units.output_tokens:
-                details['output_tokens'] = int(u.billed_units.output_tokens)
-            if u.billed_units.search_units:  # pragma: no cover
-                details['search_units'] = int(u.billed_units.search_units)
-            if u.billed_units.classifications:  # pragma: no cover
-                details['classifications'] = int(u.billed_units.classifications)
 
-        request_tokens = int(u.tokens.input_tokens) if u.tokens and u.tokens.input_tokens else None
-        response_tokens = int(u.tokens.output_tokens) if u.tokens and u.tokens.output_tokens else None
+        # Optimize attribute lookups by localizing variables
+        billed_units = u.billed_units
+        if billed_units is not None:
+            input_tokens = billed_units.input_tokens
+            if input_tokens:
+                details['input_tokens'] = int(input_tokens)
+            output_tokens = billed_units.output_tokens
+            if output_tokens:
+                details['output_tokens'] = int(output_tokens)
+            search_units = billed_units.search_units
+            if search_units:
+                details['search_units'] = int(search_units)
+            classifications = billed_units.classifications
+            if classifications:
+                details['classifications'] = int(classifications)
+
+        # Optimize tokens attribute lookup
+        tokens = u.tokens
+        request_tokens = int(tokens.input_tokens) if tokens and tokens.input_tokens else None
+        response_tokens = int(tokens.output_tokens) if tokens and tokens.output_tokens else None
+        total_tokens = ((request_tokens or 0) + (response_tokens or 0))
+
         return usage.Usage(
             request_tokens=request_tokens,
             response_tokens=response_tokens,
-            total_tokens=(request_tokens or 0) + (response_tokens or 0),
+            total_tokens=total_tokens,
             details=details,
         )
