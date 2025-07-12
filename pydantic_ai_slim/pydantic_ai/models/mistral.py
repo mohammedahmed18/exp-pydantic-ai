@@ -45,6 +45,8 @@ from . import (
     check_allow_model_requests,
     get_user_agent,
 )
+from mistralai import CompletionChunk as MistralCompletionChunk
+from mistralai.models import ChatCompletionResponse as MistralChatCompletionResponse
 
 try:
     from mistralai import (
@@ -679,12 +681,15 @@ SIMPLE_JSON_TYPE_MAPPING = {
 
 def _map_usage(response: MistralChatCompletionResponse | MistralCompletionChunk) -> Usage:
     """Maps a Mistral Completion Chunk or Chat Completion Response to a Usage."""
-    if response.usage:
+    # Cache local usage to avoid multiple attribute lookups
+    usage = response.usage
+    if usage:
+        # Use positional arguments for faster construction and minimize attribute access
         return Usage(
-            request_tokens=response.usage.prompt_tokens,
-            response_tokens=response.usage.completion_tokens,
-            total_tokens=response.usage.total_tokens,
-            details=None,
+            usage.prompt_tokens,
+            usage.completion_tokens,
+            usage.total_tokens,
+            None,
         )
     else:
         return Usage()  # pragma: no cover
