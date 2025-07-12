@@ -20,7 +20,7 @@ class ModelProfile:
     """Whether the model supports JSON schema output."""
     supports_json_object_output: bool = False
     """Whether the model supports JSON object output."""
-    default_structured_output_mode: StructuredOutputMode = 'tool'
+    default_structured_output_mode: StructuredOutputMode = "tool"
     """The default structured output mode to use for the model."""
     prompted_output_template: str = dedent(
         """
@@ -46,12 +46,29 @@ class ModelProfile:
         """Update this ModelProfile (subclass) instance with the non-default values from another ModelProfile instance."""
         if not profile:
             return self
-        field_names = set(f.name for f in fields(self))
-        non_default_attrs = {
-            f.name: getattr(profile, f.name)
-            for f in fields(profile)
-            if f.name in field_names and getattr(profile, f.name) != f.default
-        }
+        # Cache fields by type to avoid repeated calls to fields()
+        self_fields = fields(self)
+        profile_fields = fields(profile) if type(profile) != type(self) else self_fields
+
+        # Use a dict for faster name lookup
+        self_field_names = {f.name for f in self_fields}
+        profile_defaults = {f.name: f.default for f in profile_fields}
+        profile_getattr = profile.__dict__.__getitem__
+
+        # Precompute only required field objects
+        non_default_attrs = {}
+        for f in profile_fields:
+            fname = f.name
+            if fname in self_field_names:
+                try:
+                    value = profile_getattr(fname)
+                except KeyError:
+                    value = getattr(profile, fname)
+                default = profile_defaults[fname]
+                if value != default:
+                    non_default_attrs[fname] = value
+
+        # replace() is still needed for dataclass immutability and copies
         return replace(self, **non_default_attrs)
 
 
