@@ -320,17 +320,26 @@ def _estimate_string_tokens(content: str | Sequence[UserContent]) -> int:
     if not content:
         return 0
     if isinstance(content, str):
-        return len(re.split(r'[\s",.:]+', content.strip()))
-    else:
-        tokens = 0
-        for part in content:
-            if isinstance(part, str):
-                tokens += len(re.split(r'[\s",.:]+', part.strip()))
-            # TODO(Marcelo): We need to study how we can estimate the tokens for these types of content.
-            if isinstance(part, (AudioUrl, ImageUrl)):
-                tokens += 0
-            elif isinstance(part, BinaryContent):
-                tokens += len(part.data)
-            else:
-                tokens += 0
-        return tokens
+        return _count_tokens_in_str(content)
+    # Use local variables and direct function references for speed
+    tokens = 0
+    splitter = _token_splitter
+    AudioUrlType = AudioUrl
+    ImageUrlType = ImageUrl
+    BinaryContentType = BinaryContent
+    for part in content:
+        if isinstance(part, str):
+            tokens += len(splitter.split(part.strip()))
+        elif isinstance(part, (AudioUrlType, ImageUrlType)):
+            tokens += 0
+        elif isinstance(part, BinaryContentType):
+            tokens += len(part.data)
+        else:
+            tokens += 0
+    return tokens
+
+def _count_tokens_in_str(text: str) -> int:
+    # Avoids repeated compilation, stripped outside
+    return len(_token_splitter.split(text.strip()))
+
+_token_splitter = re.compile(r'[\s",.:]+')
