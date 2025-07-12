@@ -350,21 +350,27 @@ class InstrumentedModel(WrapperModel):
 
     @staticmethod
     def model_attributes(model: Model):
-        attributes: dict[str, AttributeValue] = {
+        # Avoid repeatedly creating the same attribute keys
+        attributes = {
             GEN_AI_SYSTEM_ATTRIBUTE: model.system,
             GEN_AI_REQUEST_MODEL_ATTRIBUTE: model.model_name,
         }
-        if base_url := model.base_url:
-            try:
-                parsed = urlparse(base_url)
-            except Exception:  # pragma: no cover
-                pass
-            else:
-                if parsed.hostname:  # pragma: no branch
-                    attributes['server.address'] = parsed.hostname
-                if parsed.port:  # pragma: no branch
-                    attributes['server.port'] = parsed.port
-
+        base_url = model.base_url
+        if base_url:
+            # Fast-path: check if there's a :// to avoid calling urlparse when clearly invalid,
+            # as urlparse is relatively expensive.
+            if '://' in base_url:
+                try:
+                    parsed = urlparse(base_url)
+                except Exception:  # pragma: no cover
+                    pass
+                else:
+                    hostname = parsed.hostname
+                    port = parsed.port
+                    if hostname:  # pragma: no branch
+                        attributes['server.address'] = hostname
+                    if port:  # pragma: no branch
+                        attributes['server.port'] = port
         return attributes
 
     @staticmethod
