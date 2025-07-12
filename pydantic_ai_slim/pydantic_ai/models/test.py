@@ -140,12 +140,15 @@ class TestModel(Model):
         return _JsonSchemaTestData(tool_def.parameters_json_schema, self.seed).generate()
 
     def _get_tool_calls(self, model_request_parameters: ModelRequestParameters) -> list[tuple[str, ToolDefinition]]:
+        """Return list of (tool_name, ToolDefinition). Optimized for both all-tools and subset modes."""
+        function_tools = model_request_parameters.function_tools
         if self.call_tools == 'all':
-            return [(r.name, r) for r in model_request_parameters.function_tools]
+            # Fast path: direct tuple construction using list comprehension
+            return [(r.name, r) for r in function_tools]
         else:
-            function_tools_lookup = {t.name: t for t in model_request_parameters.function_tools}
-            tools_to_call = (function_tools_lookup[name] for name in self.call_tools)
-            return [(r.name, r) for r in tools_to_call]
+            # Create mapping only once for fast indexing and avoid generator chain (build list directly)
+            function_tools_lookup = {t.name: t for t in function_tools}
+            return [(name, function_tools_lookup[name]) for name in self.call_tools]
 
     def _get_output(self, model_request_parameters: ModelRequestParameters) -> _WrappedTextOutput | _WrappedToolOutput:
         if self.custom_output_text is not None:
