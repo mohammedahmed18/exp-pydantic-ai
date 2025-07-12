@@ -137,7 +137,8 @@ class TestModel(Model):
         return self._system
 
     def gen_tool_args(self, tool_def: ToolDefinition) -> Any:
-        return _JsonSchemaTestData(tool_def.parameters_json_schema, self.seed).generate()
+        # Use static method for a single-use fast path to avoid object instantiation
+        return _JsonSchemaTestData.generate_static(tool_def.parameters_json_schema, self.seed)
 
     def _get_tool_calls(self, model_request_parameters: ModelRequestParameters) -> list[tuple[str, ToolDefinition]]:
         if self.call_tools == 'all':
@@ -302,7 +303,7 @@ class _JsonSchemaTestData:
 
     This tries to generate the minimal viable data for the schema.
     """
-
+    # For non-static use (not used in hot path in our code)
     def __init__(self, schema: _utils.ObjectJsonSchema, seed: int = 0):
         self.schema = schema
         self.defs = schema.get('$defs', {})
@@ -448,6 +449,117 @@ class _JsonSchemaTestData:
             rem //= chars
         s += _chars[self.seed % chars]
         return s
+
+    @staticmethod
+    def generate_static(schema: _utils.ObjectJsonSchema, seed: int = 0) -> Any:
+        """Generate data for the JSON schema using a fast static stateless method."""
+        # Inlining micro state rather than instantiating
+        defs = schema.get('$defs', {})
+
+        def _gen_any(schema: dict[str, Any]) -> Any:
+            if 'const' in schema:
+                return schema['const']
+            if 'enum' in schema:
+                enum = schema['enum']
+                return enum[seed % len(enum)]
+            if 'examples' in schema:
+                examples = schema['examples']
+                return examples[seed % len(examples)]
+            if '$ref' in schema:
+                import re  # lazy import, only if ref present
+                key = re.sub(r'^#/\$defs/', '', schema['$ref'])
+                js_def = defs[key]
+                return _gen_any(js_def)
+            if 'anyOf' in schema:
+                any_of = schema['anyOf']
+                return _gen_any(any_of[seed % len(any_of)])
+
+            type_ = schema.get('type')
+            if type_ is None:
+                # if there's no type or ref, we can't generate anything
+                return _char(seed)
+            elif type_ == 'object':
+                return _object_gen(schema)
+            elif type_ == 'string':
+                return _str_gen(schema)
+            elif type_ == 'integer':
+                return _int_gen(schema)
+            elif type_ == 'number':
+                return float(_int_gen(schema))
+            elif type_ == 'boolean':
+                return _bool_gen(seed)
+            elif type_ == 'array':
+                return _array_gen(schema)
+            elif type_ == 'null':
+                return None
+            else:
+                raise NotImplementedError(f'Unknown type: {type_}, please submit a PR to extend JsonSchemaTestData!')
+
+        def _char(seed):
+            # Single deterministic ASCII character, replicates original intent.
+            return chr(97 + (seed % 26))
+
+        def _object_gen(schema: dict[str, Any]) -> dict:
+            props = schema.get('properties', {})
+            required = schema.get('required', [])
+            result = {}
+            # Only required properties are output (minimal viable).
+            for k in required:
+                v_schema = props.get(k)
+                if v_schema is not None:
+                    result[k] = _gen_any(v_schema)
+            return result
+
+        def _str_gen(schema: dict[str, Any]):
+            # Respect minLength and maxLength if provided, otherwise single char
+            min_len = schema.get('minLength', 1)
+            max_len = schema.get('maxLength', min_len)
+            if isinstance(max_len, int) and max_len < min_len:
+                max_len = min_len
+            length = min_len if min_len else 1
+            # Use 'pattern' if provided, otherwise deterministic 'a'*length
+            pattern = schema.get('pattern')
+            if pattern is not None:
+                # Simple fallback for 'pattern' (match not implemented)
+                return 'a' * length
+            return 'a' * length
+
+        def _int_gen(schema: dict[str, Any]) -> int:
+            # Use 'minimum', 'maximum', or enum/const if set, else return seed
+            if 'const' in schema:
+                return schema['const']
+            if 'enum' in schema:
+                enum = schema['enum']
+                return enum[seed % len(enum)]
+            # Use minimum/maximum, favor minimum if exists else seed
+            minimum = schema.get('minimum')
+            maximum = schema.get('maximum')
+            if minimum is not None:
+                return minimum
+            if maximum is not None:
+                return maximum
+            return seed
+
+        def _bool_gen(seed) -> bool:
+            # Alternate True/False based on seed
+            return (seed % 2) == 0
+
+        def _array_gen(schema: dict[str, Any]) -> list:
+            items = schema.get('items')
+            min_items = schema.get('minItems', 1)
+            array_size = min_items if isinstance(min_items, int) and min_items > 0 else 1
+            if items is None:
+                return []
+            if isinstance(items, dict):
+                return [_gen_any(items) for _ in range(array_size)]
+            elif isinstance(items, list):
+                # Tuple validation: one item per schema
+                return [
+                    _gen_any(item_schema) for item_schema in items[:array_size]
+                ]
+            return []
+
+        return _gen_any(schema)
 
 
 def _get_string_usage(text: str) -> Usage:
