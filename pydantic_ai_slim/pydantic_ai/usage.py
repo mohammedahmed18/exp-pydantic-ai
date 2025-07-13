@@ -35,23 +35,46 @@ class Usage:
         Args:
             incr_usage: The usage to increment by.
         """
-        for f in 'requests', 'request_tokens', 'response_tokens', 'total_tokens':
-            self_value = getattr(self, f)
-            other_value = getattr(incr_usage, f)
-            if self_value is not None or other_value is not None:
-                setattr(self, f, (self_value or 0) + (other_value or 0))
+        # Unroll for fixed known attribute names for performance
+        self_requests     = self.requests     if self.requests     is not None else 0
+        incr_requests     = incr_usage.requests     if incr_usage.requests     is not None else 0
+        self.requests     = self_requests + incr_requests
 
-        if incr_usage.details:
-            self.details = self.details or {}
-            for key, value in incr_usage.details.items():
-                self.details[key] = self.details.get(key, 0) + value
+        self_request_tokens = self.request_tokens if self.request_tokens is not None else 0
+        incr_request_tokens = incr_usage.request_tokens if incr_usage.request_tokens is not None else 0
+        self.request_tokens = self_request_tokens + incr_request_tokens if (self.request_tokens is not None or incr_usage.request_tokens is not None) else None
+
+        self_response_tokens = self.response_tokens if self.response_tokens is not None else 0
+        incr_response_tokens = incr_usage.response_tokens if incr_usage.response_tokens is not None else 0
+        self.response_tokens = self_response_tokens + incr_response_tokens if (self.response_tokens is not None or incr_usage.response_tokens is not None) else None
+
+        self_total_tokens = self.total_tokens if self.total_tokens is not None else 0
+        incr_total_tokens = incr_usage.total_tokens if incr_usage.total_tokens is not None else 0
+        self.total_tokens = self_total_tokens + incr_total_tokens if (self.total_tokens is not None or incr_usage.total_tokens is not None) else None
+
+        incr_details = incr_usage.details
+        if incr_details:
+            self_details = self.details
+            if self_details is None:
+                # Direct copy if self.details is None to avoid expensive aggregation
+                self.details = incr_details.copy()
+            else:
+                for k, v in incr_details.items():
+                    self_details[k] = self_details.get(k, 0) + v
 
     def __add__(self, other: Usage) -> Usage:
         """Add two Usages together.
 
         This is provided so it's trivial to sum usage information from multiple requests and runs.
         """
-        new_usage = copy(self)
+        # Fast shallow copy via dataclass constructor
+        new_usage = self.__class__(
+            requests=self.requests,
+            request_tokens=self.request_tokens,
+            response_tokens=self.response_tokens,
+            total_tokens=self.total_tokens,
+            details=self.details.copy() if self.details is not None else None
+        )
         new_usage.incr(other)
         return new_usage
 
