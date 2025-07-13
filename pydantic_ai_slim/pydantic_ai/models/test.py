@@ -453,3 +453,9 @@ class _JsonSchemaTestData:
 def _get_string_usage(text: str) -> Usage:
     response_tokens = _estimate_string_tokens(text)
     return Usage(response_tokens=response_tokens, total_tokens=response_tokens)
+
+def _fast_count_tokens(text: str) -> int:
+    # Replace separator characters with space, then split on any whitespace
+    return len(text.strip().translate(_WHITESPACE_SEPARATORS).split())
+
+_WHITESPACE_SEPARATORS = str.maketrans({k: ' ' for k in '",.: \t\n\r\v\f'})
