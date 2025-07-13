@@ -12,6 +12,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, cast
 
+from rich.console import Console
+from rich.syntax import Syntax
 from typing_inspection.introspection import get_literal_values
 
 from . import __version__
@@ -320,18 +322,7 @@ def handle_slash_command(
         except IndexError:
             console.print('[dim]No markdown output available.[/dim]')
         else:
-            console.print('[dim]Markdown output of last question:[/dim]\n')
-            for part in parts:
-                if part.part_kind == 'text':
-                    console.print(
-                        Syntax(
-                            part.content,
-                            lexer='markdown',
-                            theme=code_theme,
-                            word_wrap=True,
-                            background_color='default',
-                        )
-                    )
+            _render_markdown(console, parts, code_theme)
 
     elif ident_prompt == '/multiline':
         multiline = not multiline
@@ -348,3 +339,25 @@ def handle_slash_command(
     else:
         console.print(f'[red]Unknown command[/red] [magenta]`{ident_prompt}`[/magenta]')
     return None, multiline
+
+
+# Pre-create the Syntax constructor with constant kwargs for performance
+def _render_markdown(console: Console, parts, code_theme: str):
+    # Output label for markdown
+    console.print('[dim]Markdown output of last question:[/dim]\n')
+    # Group all text parts, then print at once (reduces console.print & Syntax calls)
+    texts = [part.content for part in parts if part.part_kind == 'text']
+    if texts:
+        # Precompute Syntax objects outside the loop for better locality
+        syntaxes = [
+            Syntax(
+                text,
+                lexer='markdown',
+                theme=code_theme,
+                word_wrap=True,
+                background_color='default'
+            )
+            for text in texts
+        ]
+        # Using console.print(*syntaxes) prints them in batch, reducing function call overhead
+        console.print(*syntaxes)
