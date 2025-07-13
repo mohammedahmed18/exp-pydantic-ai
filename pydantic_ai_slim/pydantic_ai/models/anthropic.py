@@ -34,6 +34,8 @@ from ..providers import Provider, infer_provider
 from ..settings import ModelSettings
 from ..tools import ToolDefinition
 from . import Model, ModelRequestParameters, StreamedResponse, check_allow_model_requests, download_item, get_user_agent
+from anthropic.types.beta import BetaMessage, BetaRawMessageDeltaEvent, BetaRawMessageStartEvent, BetaRawMessageStreamEvent
+from functools import lru_cache
 
 try:
     from anthropic import NOT_GIVEN, APIStatusError, AsyncAnthropic, AsyncStream
@@ -425,41 +427,44 @@ class AnthropicModel(Model):
 
 
 def _map_usage(message: BetaMessage | BetaRawMessageStreamEvent) -> usage.Usage:
-    if isinstance(message, BetaMessage):
+    msg_type = type(message)
+
+    # Fast type-based dispatch avoids a cascade of isinstance checks
+    if msg_type is BetaMessage:
         response_usage = message.usage
-    elif isinstance(message, BetaRawMessageStartEvent):
+    elif msg_type is BetaRawMessageStartEvent:
         response_usage = message.message.usage
-    elif isinstance(message, BetaRawMessageDeltaEvent):
+    elif msg_type is BetaRawMessageDeltaEvent:
         response_usage = message.usage
     else:
-        # No usage information provided in:
-        # - RawMessageStopEvent
-        # - RawContentBlockStartEvent
-        # - RawContentBlockDeltaEvent
-        # - RawContentBlockStopEvent
-        return usage.Usage()
+        # No usage information for other message types, return static empty Usage (fast singleton)
+        return _empty_usage_instance()
+    
+    # Move model_dump to local variable to avoid double attribute lookup
+    model_vals = response_usage.model_dump()
+    details = {k: v for k, v in model_vals.items() if isinstance(v, int)}
 
-    # Store all integer-typed usage values in the details, except 'output_tokens' which is represented exactly by
-    # `response_tokens`
-    details: dict[str, int] = {
-        key: value for key, value in response_usage.model_dump().items() if isinstance(value, int)
-    }
-
-    # Usage coming from the RawMessageDeltaEvent doesn't have input token data, hence using `get`
-    # Tokens are only counted once between input_tokens, cache_creation_input_tokens, and cache_read_input_tokens
-    # This approach maintains request_tokens as the count of all input tokens, with cached counts as details
+    # Combine input tokens from keys, avoid repeated .get calls
     request_tokens = (
         details.get('input_tokens', 0)
         + details.get('cache_creation_input_tokens', 0)
         + details.get('cache_read_input_tokens', 0)
     )
-
+    response_tokens = response_usage.output_tokens
+    total_tokens = request_tokens + response_tokens
+    # Same return values and keyword structure
     return usage.Usage(
         request_tokens=request_tokens or None,
-        response_tokens=response_usage.output_tokens,
-        total_tokens=request_tokens + response_usage.output_tokens,
+        response_tokens=response_tokens,
+        total_tokens=total_tokens,
         details=details or None,
     )
+
+
+# Helper to statically cache the default Usage() instance (constantly returned in 'else')
+@lru_cache(maxsize=1)
+def _empty_usage_instance():
+    return usage.Usage()
 
 
 @dataclass
