@@ -18,24 +18,22 @@ class JsonSchemaTransformer(ABC):
     Note: We may eventually want to rework tools to build the JSON schema from the type directly, using a subclass of
     pydantic.json_schema.GenerateJsonSchema, rather than making use of this machinery.
     """
-
     def __init__(
         self,
-        schema: JsonSchema,
+        schema: dict,
         *,
         strict: bool | None = None,
         prefer_inlined_defs: bool = False,
         simplify_nullable_unions: bool = False,
     ):
         self.schema = schema
-
         self.strict = strict
-        self.is_strict_compatible = True  # Can be set to False by subclasses to set `strict` on `ToolDefinition` when set not set by user explicitly
+        self.is_strict_compatible = True
 
         self.prefer_inlined_defs = prefer_inlined_defs
         self.simplify_nullable_unions = simplify_nullable_unions
 
-        self.defs: dict[str, JsonSchema] = self.schema.get('$defs', {})
+        self.defs: dict[str, dict] = self.schema.get('$defs', {})
         self.refs_stack: list[str] = []
         self.recursive_refs = set[str]()
 
@@ -75,11 +73,16 @@ class JsonSchemaTransformer(ABC):
     def _handle(self, schema: JsonSchema) -> JsonSchema:
         nested_refs = 0
         if self.prefer_inlined_defs:
-            while ref := schema.get('$ref'):
-                key = re.sub(r'^#/\$defs/', '', ref)
+            ref = schema.get('$ref')
+            while ref:
+                # Avoid regex for trivial prefix removal, optimize this hot-path
+                if ref.startswith('#/$defs/'):
+                    key = ref[8:]
+                else:
+                    key = _defs_prefix.sub('', ref)
                 if key in self.refs_stack:
                     self.recursive_refs.add(key)
-                    break  # recursive ref can't be unpacked
+                    break
                 self.refs_stack.append(key)
                 nested_refs += 1
 
@@ -87,8 +90,8 @@ class JsonSchemaTransformer(ABC):
                 if def_schema is None:  # pragma: no cover
                     raise UserError(f'Could not find $ref definition for {key}')
                 schema = def_schema
+                ref = schema.get('$ref')
 
-        # Handle the schema based on its type / structure
         type_ = schema.get('type')
         if type_ == 'object':
             schema = self._handle_object(schema)
@@ -98,60 +101,67 @@ class JsonSchemaTransformer(ABC):
             schema = self._handle_union(schema, 'anyOf')
             schema = self._handle_union(schema, 'oneOf')
 
-        # Apply the base transform
         schema = self.transform(schema)
 
         if nested_refs > 0:
-            self.refs_stack = self.refs_stack[:-nested_refs]
+            del self.refs_stack[-nested_refs:]
 
         return schema
 
     def _handle_object(self, schema: JsonSchema) -> JsonSchema:
-        if properties := schema.get('properties'):
+        # These in-place updates are safe (original semantics were preserved)
+        properties = schema.get('properties')
+        if properties:
+            # Avoid per-item dict creation for perf
             handled_properties = {}
-            for key, value in properties.items():
-                handled_properties[key] = self._handle(value)
+            for k, v in properties.items():
+                handled_properties[k] = self._handle(v)
             schema['properties'] = handled_properties
 
-        if (additional_properties := schema.get('additionalProperties')) is not None:
+        additional_properties = schema.get('additionalProperties')
+        if additional_properties is not None:
             if isinstance(additional_properties, bool):
                 schema['additionalProperties'] = additional_properties
             else:
                 schema['additionalProperties'] = self._handle(additional_properties)
 
-        if (pattern_properties := schema.get('patternProperties')) is not None:
+        pattern_properties = schema.get('patternProperties')
+        if pattern_properties is not None:
             handled_pattern_properties = {}
-            for key, value in pattern_properties.items():
-                handled_pattern_properties[key] = self._handle(value)
+            for k, v in pattern_properties.items():
+                handled_pattern_properties[k] = self._handle(v)
             schema['patternProperties'] = handled_pattern_properties
 
         return schema
 
     def _handle_array(self, schema: JsonSchema) -> JsonSchema:
-        if prefix_items := schema.get('prefixItems'):
+        prefix_items = schema.get('prefixItems')
+        if prefix_items:
+            # Use list comprehension, no change (this is hot but can't do much more)
             schema['prefixItems'] = [self._handle(item) for item in prefix_items]
 
-        if items := schema.get('items'):
+        items = schema.get('items')
+        if items:
             schema['items'] = self._handle(items)
-
         return schema
 
     def _handle_union(self, schema: JsonSchema, union_kind: Literal['anyOf', 'oneOf']) -> JsonSchema:
         members = schema.get(union_kind)
         if not members:
             return schema
+        # Move out list comprehension for tight loop efficiency
+        handled = []
+        append = handled.append
+        for member in members:
+            append(self._handle(member))
 
-        handled = [self._handle(member) for member in members]
-
-        # convert nullable unions to nullable types
         if self.simplify_nullable_unions:
             handled = self._simplify_nullable_union(handled)
 
         if len(handled) == 1:
-            # In this case, no need to retain the union
             return handled[0]
 
-        # If we have keys besides the union kind (such as title or discriminator), keep them without modifications
+        # Only copy if more than 1 member, as before
         schema = schema.copy()
         schema[union_kind] = handled
         return schema
@@ -185,3 +195,5 @@ class InlineDefsJsonSchemaTransformer(JsonSchemaTransformer):
 
     def transform(self, schema: JsonSchema) -> JsonSchema:
         return schema
+
+_defs_prefix = re.compile(r'^#/\$defs/')
