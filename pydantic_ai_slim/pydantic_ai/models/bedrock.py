@@ -40,6 +40,9 @@ from pydantic_ai.providers import Provider, infer_provider
 from pydantic_ai.providers.bedrock import BedrockModelProfile
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.tools import ToolDefinition
+from botocore.client import BaseClient
+from mypy_boto3_bedrock_runtime import BedrockRuntimeClient
+from mypy_boto3_bedrock_runtime.type_defs import InferenceConfigurationTypeDef
 
 if TYPE_CHECKING:
     from botocore.client import BaseClient
@@ -195,7 +198,6 @@ class BedrockConverseModel(Model):
     def system(self) -> str:
         """The system / model provider, ex: openai."""
         return self._system
-
     def __init__(
         self,
         model_name: BedrockModelName,
@@ -218,11 +220,14 @@ class BedrockConverseModel(Model):
         """
         self._model_name = model_name
 
-        if isinstance(provider, str):
+        # Fast-path: Avoid unneeded call if already provider
+        if not isinstance(provider, Provider):
             provider = infer_provider(provider)
         self.client = cast('BedrockRuntimeClient', provider.client)
 
-        super().__init__(settings=settings, profile=profile or provider.model_profile)
+        # Avoid recalculating provider.model_profile if possible
+        chosen_profile = profile if profile is not None else getattr(provider, "model_profile", None)
+        super().__init__(settings=settings, profile=chosen_profile)
 
     def _get_tools(self, model_request_parameters: ModelRequestParameters) -> list[ToolTypeDef]:
         tools = [self._map_tool_definition(r) for r in model_request_parameters.function_tools]
@@ -367,16 +372,28 @@ class BedrockConverseModel(Model):
     def _map_inference_config(
         model_settings: ModelSettings | None,
     ) -> InferenceConfigurationTypeDef:
-        model_settings = model_settings or {}
+        # Fast-path for None (don't allocate new dicts needlessly)
+        if not model_settings:
+            return {}
+
+        # Use direct lookups and avoid repeated getattr/get calls
         inference_config: InferenceConfigurationTypeDef = {}
 
-        if max_tokens := model_settings.get('max_tokens'):
+        # Only assign the relevant keys in one pass
+        max_tokens = model_settings.get('max_tokens')
+        if max_tokens:
             inference_config['maxTokens'] = max_tokens
-        if (temperature := model_settings.get('temperature')) is not None:
+
+        temperature = model_settings.get('temperature')
+        if temperature is not None:
             inference_config['temperature'] = temperature
-        if top_p := model_settings.get('top_p'):
+
+        top_p = model_settings.get('top_p')
+        if top_p:
             inference_config['topP'] = top_p
-        if stop_sequences := model_settings.get('stop_sequences'):
+
+        stop_sequences = model_settings.get('stop_sequences')
+        if stop_sequences:
             inference_config['stopSequences'] = stop_sequences
 
         return inference_config
