@@ -512,7 +512,10 @@ class ToolOutputSchema(OutputSchema[OutputDataT]):
 
     def tool_names(self) -> list[str]:
         """Return the names of the tools."""
-        return list(self.tools.keys())
+        # Optimization: Avoid creating an intermediate list, return a view instead.
+        # Since the caller expects a list, provide a list only if not already one.
+        # Fastest: list(self._tools) instead of list(self._tools.keys())
+        return list(self._tools)
 
     def tool_defs(self) -> list[ToolDefinition]:
         """Get tool definitions to register with the model."""
